@@ -23,12 +23,12 @@ st.caption("유튜브 요리 영상 URL만 넣으면, 집에 없는 재료만 �
 # -----------------------------------------------------------------------------
 default_key = st.secrets.get("GEMINI_API_KEY", "")
 
+# Secrets에 등록된 키가 있으면 가져오고, 없으면 입력창에서 받음
+default_key = st.secrets.get("GEMINI_API_KEY", "")
+
 with st.sidebar:
     st.header("⚙️ 서비스 설정")
     gemini_api_key = st.text_input("Google Gemini API Key", value=default_key, type="password", help="AIStudio에서 발급받은 AIzaSy... 키를 입력하세요.")
-    tracking_code = st.text_input("쿠팡 파트너스 Tracking Code", value="AF1234567", help="본인의 파트너스 추적 코드를 입력하세요.")
-    st.divider()
-    st.info("💡 API Key는 카드 등록 없이 100% 무료로 사용할 수 있습니다.")
 
 # -----------------------------------------------------------------------------
 # 3. 핵심 헬퍼 함수
