@@ -85,54 +85,51 @@ def fetch_youtube_transcript(video_id: str) -> str:
     raise Exception("자막을 불러올 수 없습니다. 해당 영상에 자막(자동 자막 포함)이 제공되지 않습니다.")
 
 def get_ingredients_from_gemini(transcript_text: str, api_key: str):
-    """유튜브 자막을 Gemini API에 던져 재료 JSON 추출 (모델 자동 Fallback)"""
+    """구글 API에서 활성화된 Flash 모델을 동적으로 탐색하여 재료 JSON 추출"""
     client = genai.Client(api_key=api_key)
     
     prompt = f"""
     너는 요리 레시피 전문 분석가다. 
     아래 유튜브 영상 자막에서 [요리 이름]과 [필요한 재료 목록 및 용량]만 추출해라.
     
+    반드시 아래 포맷의 JSON 형식으로만 응답해야 한다:
+    {{
+        "recipe_name": "요리 이름",
+        "ingredients": [
+            {{"name": "돼지고기", "amount": "300g"}},
+            {{"name": "양파", "amount": "1개"}}
+        ]
+    }}
+    
     자막 내용:
     {transcript_text[:5000]}
     """
     
-    # 구글 Gemini 지원 모델 후보군 순차 시도
-    candidate_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']
+    # 내 API 키로 사용 가능한 모델 목록을 동적으로 조회하여 Flash 모델 자동 선택
+    target_model = None
+    try:
+        models_list = list(client.models.list())
+        for m in models_list:
+            model_name = getattr(m, 'name', str(m))
+            if 'flash' in model_name.lower() and 'embed' not in model_name.lower():
+                target_model = model_name.replace("models/", "")
+                break
+    except Exception:
+        pass
     
-    last_exception = None
-    for model_name in candidate_models:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema={
-                        "type": "OBJECT",
-                        "properties": {
-                            "recipe_name": {"type": "STRING"},
-                            "ingredients": {
-                                "type": "ARRAY",
-                                "items": {
-                                    "type": "OBJECT",
-                                    "properties": {
-                                        "name": {"type": "STRING"},
-                                        "amount": {"type": "STRING"}
-                                    },
-                                    "required": ["name", "amount"]
-                                }
-                            }
-                        },
-                        "required": ["recipe_name", "ingredients"]
-                    }
-                )
-            )
-            return json.loads(response.text)
-        except Exception as e:
-            last_exception = e
-            continue
-            
-    raise last_exception
+    # 목록 조회가 안 될 경우 기본 호환 모델 설정
+    if not target_model:
+        target_model = 'gemini-1.5-flash'
+
+    response = client.models.generate_content(
+        model=target_model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json"
+        )
+    )
+    
+    return json.loads(response.text)
 
 def make_coupang_search_url(keyword: str, tracking_code: str) -> str:
     """재료명을 쿠팡 파트너스 검색 URL 규격으로 변환"""
