@@ -19,11 +19,13 @@ st.title("🛒 TubeToCart (T2C)")
 st.caption("유튜브 요리 영상 URL만 넣으면, 집에 없는 재료만 쏙 골라 쿠팡으로 넘겨드립니다.")
 
 # -----------------------------------------------------------------------------
-# 2. 사이드바 - 설정값 (Gemini API Key & 쿠팡 파트너스 코드)
+# 2. 사이드바 - 설정값 (Secrets 자동 인식 포함)
 # -----------------------------------------------------------------------------
+default_key = st.secrets.get("GEMINI_API_KEY", "")
+
 with st.sidebar:
     st.header("⚙️ 서비스 설정")
-    gemini_api_key = st.text_input("Google Gemini API Key", type="password", help="AIStudio에서 발급받은 AIzaSy... 키를 입력하세요.")
+    gemini_api_key = st.text_input("Google Gemini API Key", value=default_key, type="password", help="AIStudio에서 발급받은 AIzaSy... 키를 입력하세요.")
     tracking_code = st.text_input("쿠팡 파트너스 Tracking Code", value="AF1234567", help="본인의 파트너스 추적 코드를 입력하세요.")
     st.divider()
     st.info("💡 API Key는 카드 등록 없이 100% 무료로 사용할 수 있습니다.")
@@ -32,10 +34,46 @@ with st.sidebar:
 # 3. 핵심 헬퍼 함수
 # -----------------------------------------------------------------------------
 def extract_video_id(url: str) -> str:
-    """유튜브 URL에서 11자리 Video ID를 추출"""
+    """유튜브 일반 URL 및 쇼츠(Shorts) URL에서 11자리 Video ID 추출"""
     pattern = r"(?:v=|\/|embed\/|shorts\/)([0-9A-Za-z_-]{11})"
     match = re.search(pattern, url)
     return match.group(1) if match else None
+
+def fetch_youtube_transcript(video_id: str) -> str:
+    """라이브러리 버전 차이 및 자막 형태(자동/한국어/영어)를 완벽하게 호환하는 자막 추출기"""
+    # 1) 최신 라이브러리 방식 (YouTubeTranscriptApi().fetch 또는 list)
+    try:
+        api = YouTubeTranscriptApi()
+        if hasattr(api, "fetch"):
+            fetched = api.fetch(video_id, languages=['ko', 'en'])
+            return " ".join([item.text if hasattr(item, 'text') else item['text'] for item in fetched])
+        elif hasattr(api, "list"):
+            transcript_list = api.list(video_id)
+            transcript = transcript_list.find_transcript(['ko', 'en'])
+            fetched = transcript.fetch()
+            return " ".join([item.text if hasattr(item, 'text') else item['text'] for item in fetched])
+    except Exception:
+        pass
+
+    # 2) 구버전 정적 메서드 방식 (YouTubeTranscriptApi.get_transcript)
+    try:
+        if hasattr(YouTubeTranscriptApi, "get_transcript"):
+            transcript_data = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko', 'en'])
+            return " ".join([item['text'] for item in transcript_data])
+    except Exception:
+        pass
+
+    # 3) 전체 자막 목록 탐색 fallback
+    try:
+        if hasattr(YouTubeTranscriptApi, "list_transcripts"):
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            for t in transcript_list:
+                fetched = t.fetch()
+                return " ".join([item['text'] if isinstance(item, dict) else item.text for item in fetched])
+    except Exception:
+        pass
+
+    raise Exception("자막을 불러올 수 없습니다. 해당 영상에 자막(자동 자막 포함)이 존재하지 않습니다.")
 
 def get_ingredients_from_gemini(transcript_text: str, api_key: str):
     """유튜브 자막을 Gemini API에 던져 재료 JSON 추출"""
@@ -49,7 +87,6 @@ def get_ingredients_from_gemini(transcript_text: str, api_key: str):
     {transcript_text[:5000]}
     """
     
-    # JSON 형식 강제 출력 설정
     response = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=prompt,
@@ -89,7 +126,7 @@ def make_coupang_search_url(keyword: str, tracking_code: str) -> str:
 if "parsed_data" not in st.session_state:
     st.session_state.parsed_data = None
 
-url_input = st.text_input("🎥 유튜브 영상 주소를 입력하세요:", placeholder="https://www.youtube.com/watch?v=...")
+url_input = st.text_input("🎥 유튜브 영상 주소를 입력하세요:", placeholder="https://www.youtube.com/watch?v=... 또는 shorts URL")
 
 if st.button("🚀 재료 추출하기", type="primary"):
     if not gemini_api_key:
@@ -103,9 +140,8 @@ if st.button("🚀 재료 추출하기", type="primary"):
         else:
             with st.spinner("유튜브 자막을 읽고 Gemini가 재료를 추출하는 중..."):
                 try:
-                    # 1) 자막 추출
-                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko'])
-                    full_text = " ".join([item['text'] for item in transcript_list])
+                    # 1) 자막 추출 (호환성 강화 버전)
+                    full_text = fetch_youtube_transcript(video_id)
                     
                     # 2) Gemini AI 파싱
                     data = get_ingredients_from_gemini(full_text, gemini_api_key)
@@ -113,7 +149,7 @@ if st.button("🚀 재료 추출하기", type="primary"):
                     st.success("재료 추출 완료!")
                     
                 except Exception as e:
-                    st.error(f"오류 발생: 자막이 없는 영상이거나 API 키가 올바르지 않습니다. ({str(e)})")
+                    st.error(f"오류 발생: {str(e)}")
 
 # -----------------------------------------------------------------------------
 # 5. 결과 출력 및 쿠팡 파트너스 구매 연동
@@ -127,7 +163,6 @@ if st.session_state.parsed_data:
 
     selected_ingredients = []
     
-    # 재료 체크박스 출력
     for idx, item in enumerate(data.get("ingredients", [])):
         label = f"{item['name']} ({item['amount']})"
         is_checked = st.checkbox(label, value=True, key=f"ing_{idx}")
@@ -136,7 +171,6 @@ if st.session_state.parsed_data:
 
     st.divider()
 
-    # 구매 버튼 생성
     if selected_ingredients:
         st.write(f"🛒 **구매할 재료 ({len(selected_ingredients)}개):** {', '.join(selected_ingredients)}")
         
