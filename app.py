@@ -85,7 +85,7 @@ def fetch_youtube_transcript(video_id: str) -> str:
     raise Exception("자막을 불러올 수 없습니다. 해당 영상에 자막(자동 자막 포함)이 제공되지 않습니다.")
 
 def get_ingredients_from_gemini(transcript_text: str, api_key: str):
-    """구글 API에서 활성화된 Flash 모델을 동적으로 탐색하여 재료 JSON 추출"""
+    """신규 유저 제한을 피하기 위해 가장 안정화된 1.5-flash 모델로 완전 고정"""
     client = genai.Client(api_key=api_key)
     
     prompt = f"""
@@ -105,24 +105,9 @@ def get_ingredients_from_gemini(transcript_text: str, api_key: str):
     {transcript_text[:5000]}
     """
     
-    # 내 API 키로 사용 가능한 모델 목록을 동적으로 조회하여 Flash 모델 자동 선택
-    target_model = None
-    try:
-        models_list = list(client.models.list())
-        for m in models_list:
-            model_name = getattr(m, 'name', str(m))
-            if 'flash' in model_name.lower() and 'embed' not in model_name.lower():
-                target_model = model_name.replace("models/", "")
-                break
-    except Exception:
-        pass
-    
-    # 목록 조회가 안 될 경우 기본 호환 모델 설정
-    if not target_model:
-        target_model = 'gemini-1.5-flash'
-
+    # 신규유저 제한이 걸린 구버전들을 피하고, 100% 열려있는 1.5-flash로 강제 지정
     response = client.models.generate_content(
-        model=target_model,
+        model='gemini-1.5-flash',
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json"
